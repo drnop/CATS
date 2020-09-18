@@ -6,7 +6,7 @@ import pprint
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 from time import gmtime,strftime
-from datetime import datetime,timedelta
+from datetime import datetime,timedelta,date
 import time
 import os
 import re
@@ -71,22 +71,29 @@ class CATS:
             r = requests.get(url,verify=False,headers=headers)
             status_code = r.status_code
             if  (status_code / 100) == 2:
+                if "Set-Cookie" in r.headers:
+                    if r.headers["Set-Cookie"][:]:
+                        self.cookie = r.headers["Set-Cookie"][:]                        
+                        self.log_debug("COOKIE SET:"+self.cookie)                            
+#                print("status is " +  str(status_code))
+#                print("text is " + r.text)
 #                json_response = json.loads(r.text)
                 json_response = r.json()
                 result = { "catsresult": "OK", "info": "GET successful"  }
                 json_response.update(result)
                 return json_response
             else:
-                errorstring = "Error in get {} {} {}".format(url,str(status_code),r.text)                                
+                errorstring = "Error in get url:{} statuscode:{} text {}".format(url,str(status_code),r.text)                                
                 self.log_debug(errorstring)                
                 raise ValueError(errorstring)                                
         except Exception as err:
             raise RuntimeError(self.exception_string(err)) from err                                                                        
 
+
     def delete(self,headers,url,verify):
 
         try:
-            self.log_debug(url)
+            self.log_debug("DELETE"  + url)
             self.log_debug(str(headers))
             r = requests.delete(url=url,headers=headers,verify=verify)
             status_code = r.status_code
@@ -106,19 +113,19 @@ class CATS:
         try:
             self.log_debug("POST:   " + url)
             self.log_debug("HEADERS:" + str(headers))
-            self.log_debug("DATA:   " + data)
+            self.log_debug("DATA:   " + str(data))
 
             if not self.authwithclientcert:
                 r = requests.post(url,data=data,headers=headers,verify=verify)
                 if r.status_code // 100 == 2:
+                    self.log_debug(str(r.status_code))                    
                     if "Set-Cookie" in r.headers:
                         if r.headers["Set-Cookie"][:]:
-                            tempcookie = r.headers["Set-Cookie"][:]
-                            if not self.cookie:
-                                self.cookie = tempcookie
-                            self.log_debug("COOKIE SET:"+self.cookie)                            
+                            self.cookie = r.headers["Set-Cookie"][:]
+                            self.log_debug("COOKIE SET:"+self.cookie)
+                    self.log_debug(r.text)
                     rsp = json.loads(r.text)
-                    rsp.update({"catsresult": "OK"})
+#                    rsp.update({"catsresult": "OK"})
                     return rsp
                 else:
                     errorstring = "Error in post {} {} {}".format(url,str(r.status_code),r.text)
@@ -582,8 +589,86 @@ class SMA(CATS):
         path = "{}/reporting/{}".format(self.baseurl,api)
         url = "{}/?device_type={}&startDate={}&endDate={}".format(path,self.device_type,time_from,time_to)
         return (self.get(url=url,headers=self.headers,verify=False))
-    
-#
+
+    def messageTrackingDLP(self,days="0",hours="1",minutes="0",sender="",critical=True,high=True,medium=False,low=False):
+
+        time_to = datetime.utcnow().strftime('%Y-%m-%dT%H')
+        time_to = time_to + ":00:00.000Z"
+        time_from = (datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))).strftime('%Y-%m-%dT%H')
+        time_from = time_from + ":00:00.000Z"
+
+        severities = ""
+        if critical:
+            severities = "critical"
+        if high:
+            if severities:
+                severities = severities + ",high"
+            else:
+                severities = "high"
+        if medium:
+            if severities:
+                severities = severities + ",medium"
+            else:
+                severities = "medium"
+        if low:
+            if severities:
+                severities = severities + ",low"
+            else:
+                severities = "low"
+            
+        
+        path = "{}/message-tracking/messages".format(self.baseurl)
+        url = "{}?searchOption=messages&startDate={}&endDate={}&ciscoHost=All_Hosts".format(path,time_from,time_to)
+        url = "{}&envelopeSenderfilterOperator=begins_with&envelopeSenderfilterValue={}".format(url,sender)
+        if severities:
+            url = "{}&dlpViolationsSeverities={}".format(url,severities)
+        
+        return (self.get(url=url,headers=self.headers,verify=False))
+
+    def messageTrackingDLPdetails(self,days="0",hours="1",minutes="0",icids=[],mids=[],serialNumber=""):
+
+        time_to = datetime.utcnow().strftime('%Y-%m-%dT%H')
+        time_to = time_to + ":00:00.000Z"
+        time_from = (datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))).strftime('%Y-%m-%dT%H')
+        time_from = time_from + ":00:00.000Z"
+        
+        path = "{}/message-tracking/dlp-details/".format(self.baseurl)
+        url = "{}?searchOption=messages&startDate={}&endDate={}&ciscoHost=All_Hosts".format(path,time_from,time_to)
+        if serialNumber:
+            url = "{}&serialNumber={}".format(url,serialNumber)
+        icidquery = ""
+        for icid in icids:
+            if icidquery:
+                icidquery = icidquery + "&" + "icid=" + str(icid)
+            else:
+                icidquery = "icid" + str(icid)
+        if icidquery:
+            url = "{}&{}".format(url,icidquery)
+        midquery = ""            
+        for mid in mids:
+            if midquery:
+                midquery = midquery + "&" + "mid=" + str(mid)
+            else:
+                midquery = "mid" + str(mid)
+        if midquery:
+            url = "{}&{}".format(url,midquery)
+        if serialNumber:
+            url = "{}&serialNumber={}".format(url,serialNumber)
+        
+        return (self.get(url=url,headers=self.headers,verify=False))
+
+    def getDLPdetails(self,days="0",hours="1",minutes="0",sender="",critical=True,high=True,medium=False,low=False):
+
+        data = []
+        tmprsp = self.messageTrackingDLP(days=days,hours=hours,minutes=minutes,sender=sender,critical=critical,high=high,medium=medium,low=low)
+        for d in tmprsp["data"]:
+            mids = d["attributes"]["mid"]
+            icids = d["attributes"]["allIcid"]
+            serialNumber = d["attributes"]["serialNumber"]
+            drsp = self.messageTrackingDLPdetails(days=days,mids=mids,icids=icids,serialNumber=serialNumber)
+            data.append(drsp["data"])
+        rsp = {"catsResult":"OK", "data": data}
+        return(rsp)
 #   Class implementing parts of SW Cloud api
 #
 class SWC(CATS):
@@ -668,13 +753,7 @@ class SW(CATS):
         self.tenantid = ""
         self.cookie   = ""
         try:
-
-            url = "https://{}/token/v2/authenticate".format(server)
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-            data = "username={}&password={}".format(username,password)
-            rsp = self.post(url=url,headers=headers,data=data,verify=False)
+            self.authenticate()
             url = "https://{}{}/tenants".format(self.server,self.API_BASE)
 
             headers = {
@@ -687,10 +766,18 @@ class SW(CATS):
         except Exception as err:
             raise RuntimeError(self.exception_string(err)) from err                        
     
-
+    def authenticate(self):
+        url = "https://{}/token/v2/authenticate".format(self.server)
+        headers = {
+                "Content-Type": "application/x-www-form-urlencoded"
+        }
+        data = "username={}&password={}".format(self.username,self.password)
+        rsp = self.post(url=url,headers=headers,data=data,verify=False)
+        # self.post will set self.cookie
 
     def getHostGroups(self):
 
+        self.authenticate()        
         url = "https://{}/smc-configuration/rest/v1/tenants/{}/tags".format(self.server,self.tenantid)
 #       url = 'https://' + SMC_HOST + '/smc-configuration/rest/v1/tenants/' + SMC_TENANT_ID + '/tags/'        
 
@@ -713,6 +800,7 @@ class SW(CATS):
         Requesting data for any specific tenant will result in error.)
 
         '''
+        self.authenticate()                
         url = "https://{}/sw-reporting/v2/tenants/0/incidents?ipAddress={}".format(self.server,ip)
 #        url = 'https://' + SMC_HOST + '/sw-reporting/v2/tenants/0/incidents?ipAddress=' + MALICIOUS_IP
 
@@ -724,7 +812,7 @@ class SW(CATS):
 
     def eventList(self):
         
-
+        self.authenticate()        
         url = "https://{}/sw-reporting/v1/tenants/{}/security-events/templates".format(self.server,self.tenantid)
         headers = {
             "Content-Type":"application/json",
@@ -816,15 +904,14 @@ class SW(CATS):
             raise RuntimeError(self.exception_string(err)) from err                                    
 
 
-    def searchSecurityEvents(self,days=0,hours=0,minutes=0,sourceip="",targetip="",wait=3):
+    def searchSecurityEvents(self,days=0,hours=0,minutes=0,sourceip="",targetip="",seceventids=[],wait=3):
 #
 #  weird, different time format reuired for flow reports compated to security events
 #
-
+        self.authenticate()        
         time_to = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
         time_from = (datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-        seceventids = []
         body = {
             "securityEventTypeIds": seceventids,
             "timeRange": {
@@ -850,7 +937,7 @@ class SW(CATS):
 #
 #  weird, different time format reuired for flow reports compated to security events
 #
-        
+
         time_to = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
         temp_t = (datetime.utcnow() - timedelta(days=days,hours = hours))
         time_from = temp_t.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
@@ -1036,6 +1123,7 @@ class SW(CATS):
     '''
     def getFlows(self,sip=[],shostgroup=[],pip=[],phostgroups=[],days=0,hours=1,minutes=0):
 
+        self.authenticate()                
         url = "https://{}/sw-reporting/v2/tenants/{}/flows/queries".format(self.server,self.tenantid)
 
         # Set the timestamps for the filters, in the correct format, for last 60 minutes
@@ -1282,6 +1370,16 @@ class UMBRELLA(CATS):
         self.orgid = orgid
         
 
+    def getDevices(self):
+        headers = {}
+        key = self.key
+        secret = self.secret
+        toencode = key + ":" + secret
+        bencoded = base64.b64encode(toencode.encode())
+        headers["Authorization"] = "Basic " + bencoded.decode()
+        url = "https://management.api.umbrella.com/v1/organizations/{}/networkdevices/".format(self.orgid)
+        return(self.get(headers=headers,url=url,verify=True))        
+
     def listEnforcement(self):
 
         headers = {'Content-Type': 'application/json'}
@@ -1384,6 +1482,8 @@ class CTR(CATS):
         CATS.__init__(self,debug,logfile)        
         self.client_id = client_id
         self.client_secret = client_secret
+        self.debug = debug
+
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Accept': 'application/json',
@@ -1393,7 +1493,9 @@ class CTR(CATS):
             'grant_type': 'client_credentials'
         }
         try:
-            response = requests.post('https://visibility.amp.cisco.com/iroh/oauth2/token', headers=headers, data=data, auth=(client_id, client_secret))
+            url = 'https://visibility.amp.cisco.com/iroh/oauth2/token'
+            self.log_debug("POST URL is {} Headers {} Data {} auth is {}".format(url,str(headers),str(data),client_id + "  " + client_secret))
+            response = requests.post(url, headers=headers, data=data, auth=(client_id, client_secret))
     
             if response.status_code == 200:
                 rsp_dict = json.loads(response.text)
@@ -1402,12 +1504,13 @@ class CTR(CATS):
                 self.expiration_time = (rsp_dict['expires_in'])
                 return None
             else:
-                self.log_debug("Access token request failed, status code: {response.status_code}")
-                return None
+                errorstring = "Access token request failed, status code: {response.status_code}"
+                self.log_debug(errorstring)
+                raise ValueError(errorstring)
         except Exception as err:
             raise RuntimeError(self.exception_string(err)) from err                                                    
 
-
+    ''' Given raw text, return structured observables'''
     def get_observables(self,raw_text):
 
         bearer_token = 'Bearer ' + self.access_token
@@ -1419,7 +1522,20 @@ class CTR(CATS):
         data = json.dumps({"content":raw_text})
         return (self.post('https://visibility.amp.cisco.com/iroh/iroh-inspect/inspect', headers=headers, data=data,verify=True))
 
-    def get_actions_observables(self,observable): 
+    ''' Given observables, enrich with verdict/judgeent '''
+    def enrich_observables(self,observables):
+        enrich_url = 'https://visibility.amp.cisco.com/iroh/iroh-enrich/deliberate/observables'
+        bearer_token = 'Bearer ' + self.access_token
+        headers = {
+            'Authorization': bearer_token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        data = json.dumps(observables)
+        return (self.post(enrich_url, headers=headers, data=data,verify=True))
+
+    ''' Given observables, what actions can be performed by different modules (e.g isolate host, AO etc '''        
+    def get_actions_for_observables(self,observables): 
 
         bearer_token = 'Bearer ' + self.access_token
         headers = {
@@ -1428,10 +1544,11 @@ class CTR(CATS):
             'Accept': 'application/json'
         }
         # grab the type of the observable, that is needed
-        rsp= self.get_observables(observable)
-        type_of_observable = rsp[0]['type']        
+#        rsp= self.get_observables(observable)
+#        type_of_observable = rsp[0]['type']        
 
-        data = json.dumps([{"value":observable, "type":type_of_observable}])
+#        data = json.dumps([{"value":observable, "type":type_of_observable}])
+        data = json.dumps(observables)
         return (self.post('https://visibility.amp.cisco.com/iroh/iroh-response/respond/observables', headers=headers, data=data,verify=True))
 
 
@@ -1445,6 +1562,79 @@ class CTR(CATS):
         data = json.dumps(observables)
         return (self.post('https://visibility.amp.cisco.com/iroh/iroh-enrich/observe/observables', headers=headers, data=data,verify=True))
     
+
+
+    def create_casebook(self,casebook_name,casebook_title,casebook_description,observables_string):
+        timenow = datetime.utcnow()
+        d = date.today()
+        start_date = d.strftime("%Y-%m-%d")
+        casebook_obj_json = {}
+        casebook_obj_json["type"] = "casebook"
+        casebook_obj_json["title"] = casebook_name + start_date
+        casebook_obj_json["texts"] = []
+        observables = json.loads(observables_string)
+        casebook_obj_json["observables"] = observables
+        casebook_obj_json["short_description"] = casebook_description
+        casebook_obj_json["description"] = casebook_description
+        casebook_obj_json["schema_version"] = "1.0.11"
+
+        casebook_obj_json["timestamp"] = start_date
+
+        casebook_obj_json["source"] = "ao"
+
+        casebook_obj_json["tlp"] = "amber"
+
+        bearer_token = 'Bearer ' + self.access_token
+        headers = {
+            'Authorization': bearer_token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        data = json.dumps(casebook_obj_json)
+        temp = json.loads(data)
+        return (self.post('https://private.intel.amp.cisco.com/ctia/casebook', headers=headers, data=data,verify=True))
+        '''
+        return (self.post('https://visibility.amp.cisco.com/ctia/casebook', headers=headers, data=data,verify=True))
+        '''
+    def get_casebook(self,id):
+        id = urllib.parse.quote(id,safe='')
+        bearer_token = 'Bearer ' + self.access_token
+        headers = {
+            'Authorization': bearer_token,
+#            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        url = "https://private.intel.amp.cisco.com/ctia/casebook/{}".format(id)
+        return self.get(headers=headers,url=url,verify=True)
+
+    def delete_casebook(self,id):
+        id = urllib.parse.quote(id,safe='')
+        bearer_token = 'Bearer ' + self.access_token
+        headers = {
+            'Authorization': bearer_token,
+#            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        url = "https://private.intel.amp.cisco.com/ctia/casebook/{}".format(id)
+        return self.delete(headers=headers,url=url,verify=True)
+        
+    def add_casebook_observables(self,id,observables_string):
+        observables = json.loads(observables_string)
+        
+        observables_update = {"operation": "add",
+                "observables": observables
+               }
+        data = json.dumps(observables_update)
+        bearer_token = 'Bearer ' + self.access_token
+        headers = {
+            'Authorization': bearer_token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        id = urllib.parse.quote(id,safe='')
+        url = "https://private.intel.amp.cisco.com/ctia/casebook/{}/observables".format(id)
+        return (self.post(url, headers=headers, data=data,verify=True))
+
 class ISE_ANC(CATS):
     
     def __init__(self,server,username,password,debug,logfile=""):
@@ -1631,7 +1821,11 @@ class ISE_PXGRID(CATS):
     def activate(self):
         
         self.authstring = self.getAuthstring(self.nodename,self.password)
-        self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':" Basic {}".format(self.authstring)}
+        self.log_debug("nodenae" + self.nodename)                
+        self.log_debug("pass" + self.password)        
+        self.log_debug("auths" + self.authstring)
+        self.log_debug("desc" + self.description)
+        self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
 
         attempts = 0
         activated = False
@@ -1654,7 +1848,7 @@ class ISE_PXGRID(CATS):
     
     def serviceLookup(self,servicename):
         self.authstring = self.getAuthstring(self.nodename,self.password)
-        self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':" Basic {}".format(self.authstring)}
+        self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
         pdata = {'name':servicename}
         url = "https://{}:8910/pxgrid/control/ServiceLookup".format(self.server)
         rsp = self.post(url=url,headers=self.headers,data=json.dumps(pdata),verify=False)
@@ -1667,7 +1861,7 @@ class ISE_PXGRID(CATS):
             "peerNodeName": self.service["nodeName"]
         }
         self.authstring = self.getAuthstring(self.nodename,self.password)
-        self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':" Basic {}".format(self.authstring)}
+        self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
         url = "https://{}:8910/pxgrid/control/AccessSecret".format(self.server)
         rsp = self.post(url=url,headers=self.headers,data=json.dumps(pdata),verify=False)
         self.secret = rsp["secret"]
@@ -1704,7 +1898,7 @@ class ISE_PXGRID(CATS):
                     url = self.restBaseURL+ "/getSessions"                    
 
             self.authstring = self.getAuthstring(self.nodename,self.secret)
-            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':" Basic {}".format(self.authstring)}
+            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
             
             return(self.post(url=url,headers=self.headers,data=payload,verify=False))
 
@@ -1720,7 +1914,7 @@ class ISE_PXGRID(CATS):
             self.serviceLookup("com.cisco.ise.sxp")
             self.updateAccessSecret()
             self.authstring = self.getAuthstring(self.nodename,self.secret)
-            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':" Basic {}".format(self.authstring)}
+            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
 #            self.restBaseURL = "https://ise70.labrats.se:8910/pxgrid/ise/sxp"            
             payload = '{}'
             url = self.restBaseURL+ "/getBindings"                    
@@ -1738,7 +1932,7 @@ class ISE_PXGRID(CATS):
             self.serviceLookup("com.cisco.ise.config.trustsec")
             self.updateAccessSecret()
             self.authstring = self.getAuthstring(self.nodename,self.secret)
-            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':" Basic {}".format(self.authstring)}
+            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
 #            self.restBaseURL = "https://ise70.labrats.se:8910/pxgrid/ise/sxp"            
             payload = '{}'
             url = self.restBaseURL+ "/getSecurityGroups"                    
@@ -1756,7 +1950,7 @@ class ISE_PXGRID(CATS):
             self.serviceLookup("com.cisco.ise.config.trustsec")
             self.updateAccessSecret()
             self.authstring = self.getAuthstring(self.nodename,self.secret)
-            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':" Basic {}".format(self.authstring)}
+            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
 #            self.restBaseURL = "https://ise70.labrats.se:8910/pxgrid/ise/sxp"            
             payload = '{}'
             url = self.restBaseURL+ "/getSecurityGroupAcls"                    
@@ -1772,7 +1966,7 @@ class ISE_PXGRID(CATS):
             self.serviceLookup("com.cisco.ise.config.profiler")
             self.updateAccessSecret()
             self.authstring = self.getAuthstring(self.nodename,self.secret)
-            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':" Basic {}".format(self.authstring)}
+            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
 #            self.restBaseURL = "https://ise70.labrats.se:8910/pxgrid/ise/sxp"            
             payload = '{}'
             url = self.restBaseURL+ "/getProfiles"                    
@@ -1804,7 +1998,7 @@ class DUO_ADMIN(CATS):
         z.update(y)
         return z
 
-    def sign(self, method, host, path, params, skey, ikey):
+    def sign(self, method, host, path, params):
         """
         Return HTTP Basic Authentication ("Authorization" and "Date") headers.
         method, host, path: strings from request
@@ -1812,6 +2006,8 @@ class DUO_ADMIN(CATS):
         skey: secret key
         ikey: integration key
         """
+        if self.debug:
+            self.log_debug("Signing method {} host {} path {} params {} skey {} ikey {}".format(method,host,path,json.dumps(params),self.api_skey,self.api_ikey))
         # create canonical string
         now = email.utils.formatdate()
         canon = [now, method.upper(), host.lower(), path]
@@ -1825,8 +2021,11 @@ class DUO_ADMIN(CATS):
         canon.append('&'.join(args))
         canon = '\n'.join(canon)
         # sign canonical string
-        sig = hmac.new(skey.encode(), canon.encode(), hashlib.sha1)
-        auth = '%s:%s' % (ikey, sig.hexdigest())
+        if self.debug:
+            self.log_debug("signing canon:\n{}".format(canon))
+        
+        sig = hmac.new(self.api_skey.encode(), canon.encode(), hashlib.sha1)
+        auth = '%s:%s' % (self.api_ikey, sig.hexdigest())
 
         # return headers
         return {'Date': now, 'Authorization': 'Basic %s' % base64.b64encode(auth.encode()).decode()}
@@ -1836,13 +2035,16 @@ class DUO_ADMIN(CATS):
         self.api_ikey= api_ikey
         self.api_skey= api_skey
         self.duo_host= duo_host
+        self.duo_headers = {'Content-Type':'application/x-www-form-urlencoded', 
+                            'User-Agent': 'Duo API Python/4.2.3',
+                            'Host':self.duo_host}
         self.log_debug("\r\nInitiating Duo with api_ikey: {} api_skey: {} host: {}".format(self.api_ikey,self.api_skey,self.duo_host))
         
         """ necessary headers for Duo """
         self.duo_headers = {'Content-Type':'application/x-www-form-urlencoded',
-        'User-Agent': 'Duo API Python/4.2.3','Host':duo_host}
+        'User-Agent': 'Duo API Python/4.2.3','Host':self.duo_host}
 
-
+        self.service_url = "/admin/v1/users"
         """ necessary headers for Duo """
 
         # Duo check API request  
@@ -1872,13 +2074,28 @@ class DUO_ADMIN(CATS):
 
 
 
-    def logs(self, mintime, maxtime, users="all"):
+    def logs(self, days=1,hours=0,minutes=0, users=""):
+
+            time_to = datetime.utcnow()
+            time_from = datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))
+
+            dt_time_to = time_to.replace().timestamp()
+            dt_time_to= re.sub(r'\d+$', '', str(dt_time_to))
+            dt_time_from = time_from.replace().timestamp()
+            dt_time_from= re.sub(r'\d+$', '', str(dt_time_from))
+            dt_time_to = dt_time_to[:-1] + "000"
+            dt_time_from = dt_time_from[:-1] + "000"
+
+            mintime = dt_time_from
+            maxtime = dt_time_to
             self.log_debug("\r\nGet the Duo logs request with api_ikey: {} api_skey: {} host: {} mintime: {} maxtime: {}".format(self.api_ikey,self.api_skey,self.duo_host, mintime, maxtime))
             # Duo check API request  
             service_url ="/admin/v2/logs/authentication"
-            params={ 'mintime':str(mintime), 'maxtime':str(maxtime), 'users':str(users) }
-
-            params1= self.sign("GET", self.duo_host, service_url, params, self.api_skey, self.api_ikey)
+            if users:
+                params={ 'mintime':str(mintime), 'maxtime':str(maxtime), 'users':str(users) }
+            else:
+                params={ 'mintime':str(mintime), 'maxtime':str(maxtime) }
+            params1= self.sign("GET", self.duo_host, service_url, params)
             params2= self.merge_two_dicts(self.duo_headers, params1)
             encoded_headers = self.encode_headers(params2)
 
@@ -1898,13 +2115,19 @@ class DUO_ADMIN(CATS):
             except Exception as err:
                 raise RuntimeError(self.exception_string(err)) from err                            
 
+    def getAuthLogs(self,username="",days=7,hours=0,minutes=0):
+        rsp1 = self.users(username=username)
+        user_id = rsp1["response"][0]["user_id"]
+        return (self.logs(users=user_id,days=days,hours=hours,minutes=minutes))
+
+    
     def users(self, username):
             self.log_debug("\r\nGet the Duo users request") 
             # Duo check API request  
             service_url ="/admin/v1/users"
 
             params={ 'username':str(username) }
-            params1= self.sign("GET", self.duo_host, service_url, params, self.api_skey, self.api_ikey)
+            params1= self.sign("GET", self.duo_host, service_url, params)
             params2= self.merge_two_dicts(self.duo_headers, params1)
             encoded_headers = self.encode_headers(params2)
 
@@ -1924,7 +2147,45 @@ class DUO_ADMIN(CATS):
                 raise RuntimeError(self.exception_string(err)) from err                                            
 
 
+    def userCreate(self,username, upn, email):
+        if email == None or email == "<no value>":
+            post_data = {"username": upn, "status": "active"}
+        else:
+    	    post_data = {"username": upn, "email":email,"status": "active"}
 
+        service_url = "/admin/v1/users"
+
+        params1= self.sign("POST", self.duo_host, service_url, post_data)
+        params2= self.merge_two_dicts(self.duo_headers, params1)
+        encoded_headers = self.encode_headers(params2)
+#        rsp =self.post(url="https://"+self.duo_host+service_url, headers=encoded_headers, data=json.dumps(post_data),verify=True)
+        rsp =self.post(url="https://"+self.duo_host+service_url, headers=encoded_headers, data=post_data,verify=True)
+        return(rsp)
+
+
+
+    def userEnroll(self,upn, email):
+        if email == None or email == "<no value>":
+            print("ERROR: no email address.")
+            return None
+        #POST /admin/v1/users/enroll
+        service_url_enroll ="/admin/v1/users/enroll"
+        post_data = {"username": upn, "email":email}
+        params1= self.sign("POST", self.duo_host, service_url_enroll, post_data)
+        params2= self.merge_two_dicts(self.duo_headers, params1)
+        encoded_headers = self.encode_headers(params2)
+        rsp=self.post(url="https://"+self.duo_host+service_url_enroll, headers=encoded_headers, data=post_data,verify=False)
+        return(rsp)
+
+    def modify_user(self,id,status):
+        service_url_enroll ="/admin/v1/users/{}".format(id)
+        post_data = {"status":status}
+        params1= self.sign("POST", self.duo_host, service_url_enroll, post_data)
+        params2= self.merge_two_dicts(self.duo_headers, params1)
+        encoded_headers = self.encode_headers(params2)
+        rsp=self.post(url="https://"+self.duo_host+service_url_enroll, headers=encoded_headers, data=post_data,verify=False)
+        return(rsp)
+        
 
 
 
