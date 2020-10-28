@@ -1976,7 +1976,23 @@ class ISE_PXGRID(CATS):
         except Exception as err:
             raise RuntimeError(self.exception_string(err)) from err                                                            
         
+
+    def getFailures(self):
+
+        try:
+            self.serviceLookup("com.cisco.ise.radius")
+            self.updateAccessSecret()
+            self.authstring = self.getAuthstring(self.nodename,self.secret)
+            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
+#            self.restBaseURL = "https://ise70.labrats.se:8910/pxgrid/ise/sxp"            
+            payload = '{}'
+            url = self.restBaseURL+ "/getFailures"                    
             
+            return(self.post(url=url,headers=self.headers,data=payload,verify=False))
+
+        except Exception as err:
+            raise RuntimeError(self.exception_string(err)) from err                                                            
+     
 
 
 class DUO_ADMIN(CATS):

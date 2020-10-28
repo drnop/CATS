@@ -133,7 +133,8 @@ OPERATIONS = [{'name':"getsessions",'description':"get sessions : -i ip or -m ma
               {'name':"getbindings",'description':"get SXP bindings"},
               {'name':"getsecuritygroups",'description':"get TrustSec Security Group"},
               {'name':"getsecuritygroupacls",'description':"get TrustSec Security Group ACLs"},
-              {'name':"getprofiles",'description':"get Profiles"},              
+              {'name':"getprofiles",'description':"get Profiles"},
+              {'name':"getfailures",'description':"get RADIUS failures"}
               ]
 
 
@@ -264,6 +265,8 @@ def main(argv):
             rsp = i.getSecurityGroupACLs()
         if operation == "getprofiles":                        
             rsp = i.getProfiles()
+        if operation == "getfailures":                        
+            rsp = i.getFailures()
             
         print(json.dumps(rsp,indent=4,sort_keys=True))
 
