@@ -75,9 +75,9 @@ class CATS:
                     if r.headers["Set-Cookie"][:]:
                         self.cookie = r.headers["Set-Cookie"][:]                        
                         self.log_debug("COOKIE SET:"+self.cookie)                            
-#                print("status is " +  str(status_code))
-#                print("text is " + r.text)
-#                json_response = json.loads(r.text)
+                print("status is " +  str(status_code))
+                print("text is " + r.text)
+                json_response = json.loads(r.text)
                 json_response = r.json()
                 result = { "catsresult": "OK", "info": "GET successful"  }
                 json_response.update(result)
@@ -1552,7 +1552,7 @@ class CTR(CATS):
         return (self.post('https://visibility.amp.cisco.com/iroh/iroh-response/respond/observables', headers=headers, data=data,verify=True))
 
 
-    def get_sightings_for_observables(self,observables):
+    def get_observe_observables(self,observables):
         bearer_token = 'Bearer ' + self.access_token
         headers = {
             'Authorization': bearer_token,
@@ -1562,7 +1562,17 @@ class CTR(CATS):
         data = json.dumps(observables)
         return (self.post('https://visibility.amp.cisco.com/iroh/iroh-enrich/observe/observables', headers=headers, data=data,verify=True))
     
-
+    def get_sightings_for_observables(self,observables):
+        bearer_token = 'Bearer ' + self.access_token
+        headers = {
+            'Authorization': bearer_token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        otype = observables[0]["type"]
+        ovalue = observables[0]["value"]
+        return (self.get('https://private.intel.amp.cisco.com/ctia/{}/{}/sightings'.format(otype,ovalue), headers=headers,verify=True))
+    
 
     def create_casebook(self,casebook_name,casebook_title,casebook_description,observables_string):
         timenow = datetime.utcnow()
@@ -1977,7 +1987,21 @@ class ISE_PXGRID(CATS):
             raise RuntimeError(self.exception_string(err)) from err                                                            
         
             
+    def getFailures(self):
 
+        try:
+            self.serviceLookup("com.cisco.ise.radius")
+            self.updateAccessSecret()
+            self.authstring = self.getAuthstring(self.nodename,self.secret)
+            self.headers = {'Content-Type': 'application/json','Accept':'application/json','Authorization':"Basic {}".format(self.authstring)}
+#            self.restBaseURL = "https://ise70.labrats.se:8910/pxgrid/ise/sxp"            
+            payload = '{}'
+            url = self.restBaseURL+ "/getFailures"                    
+
+            return(self.post(url=url,headers=self.headers,data=payload,verify=False))
+
+        except Exception as err:
+            raise RuntimeError(self.exception_string(err)) from err       
 
 class DUO_ADMIN(CATS):
 
