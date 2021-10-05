@@ -35,6 +35,10 @@ class CATS:
         self.debug = debug
         self.logfile = logfile
         self.authwithclientcert = False
+        self.clientcert = ""
+        self.clientkey = ""
+        self.clientkeypassword = ""
+        self.servercert = ""
         
     def log_debug(self,message):
         if self.debug:
@@ -49,12 +53,12 @@ class CATS:
     
         (exc_type, exc_obj, exc_tb) = sys.exc_info()
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        errorstring = "Exception! {} {} {} {}\n ".format(str(err),exc_type,fname,exc_tb.tb_lineno)
+        errorstring = "Exception! {} {} {} {} {}\n ".format(str(err),exc_type,fname,exc_tb.tb_lineno,exc_obj)
         self.log_debug(errorstring)
         return errorstring
 
     def get_ssl_context(self):
-        self.log_debug("Creating SSL context")
+        self.log_debug("Creating SSL context {} {} {} {}".format(self.clientcert,self.clientkey,self.clientkeypassword,self.servercert))
         context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
         if self.clientcert is not None:
             context.load_cert_chain(certfile=self.clientcert,
@@ -75,8 +79,8 @@ class CATS:
                     if r.headers["Set-Cookie"][:]:
                         self.cookie = r.headers["Set-Cookie"][:]                        
                         self.log_debug("COOKIE SET:"+self.cookie)                            
-                print("status is " +  str(status_code))
-                print("text is " + r.text)
+                self.log_debug("status is " +  str(status_code))
+                self.log_debug("text is " + r.text)
                 json_response = json.loads(r.text)
                 json_response = r.json()
                 result = { "catsresult": "OK", "info": "GET successful"  }
@@ -97,7 +101,7 @@ class CATS:
             self.log_debug(str(headers))
             r = requests.delete(url=url,headers=headers,verify=verify)
             status_code = r.status_code
-            if  (status_code == 204):
+            if  (status_code // 100 ==2):
                 result = { "catsresult": "OK", "info": "Delete successful" }
                 return result
             else:
@@ -124,8 +128,12 @@ class CATS:
                             self.cookie = r.headers["Set-Cookie"][:]
                             self.log_debug("COOKIE SET:"+self.cookie)
                     self.log_debug(r.text)
-                    rsp = json.loads(r.text)
-#                    rsp.update({"catsresult": "OK"})
+                    if r.status_code == 204:
+                        ### empty response, e.g. the requested item does not exist
+                        ### avoid exception in json.loads
+                        rsp = {}
+                    else:
+                        rsp = json.loads(r.text)
                     return rsp
                 else:
                     errorstring = "Error in post {} {} {}".format(url,str(r.status_code),r.text)
@@ -143,7 +151,7 @@ class CATS:
                 self.log_debug("Opening HTTPS request with SSL context")
                 rest_response = opener.open(rest_request)
                 self.log_debug("Successfully opened HTTP Request")
-                self.log_debug("rest response".format(rest_response))
+                self.log_debug("rest response {}".format(str(rest_response)))
                 response = rest_response.read().decode()
                 self.log_debug('  response=' + response)
                 rsp = json.loads(response)
@@ -360,7 +368,7 @@ class FTD(CATS):
 
     def network_object_delete_by_name(self,name):
         rsp = self.network_objects_get()
-        found_item = find_item(rsp,"name",name)
+        found_item = self.find_item(rsp,"name",name)
         if found_item:
             return(self.ftddelete(api="object/networks/{}".format(found_item["id"])))
         else:
@@ -443,7 +451,7 @@ class FMC(CATS):
             if device["name"] == devicename:
                 device_id = device["id"]
         if not device_id:
-            errorstring = "Could not perform operation - could not finde device".format(devicename)
+            errorstring = "Could not perform operation - could not finde device {}".format(devicename)
             self.log_debug(errorstring)                
             raise ValueError(errorstring)
             
@@ -539,7 +547,7 @@ class SMA(CATS):
         bencode = base64.b64encode((username).encode())
         b64username = bencode.decode()
         bencode = base64.b64encode((password).encode())
-        b64passcode = bencode.decode()
+        #b64passcode = bencode.decode()
         body = {
             "data" : {
                 "userName": b64username,
@@ -772,7 +780,7 @@ class SW(CATS):
                 "Content-Type": "application/x-www-form-urlencoded"
         }
         data = "username={}&password={}".format(self.username,self.password)
-        rsp = self.post(url=url,headers=headers,data=data,verify=False)
+        self.post(url=url,headers=headers,data=data,verify=False)
         # self.post will set self.cookie
 
     def getHostGroups(self):
@@ -831,7 +839,7 @@ class SW(CATS):
 
         if self.tenantid:
             if tag:
-                url = "https://{}{}{}".format(self.server,API_BASE,path.format(self.tenantid,tag))
+                url = "https://{}{}{}".format(self.server,self.API_BASE,path.format(self.tenantid,tag))
 #                url = "https://" + self.server  + self.API_BASE + path.format(self.tenantid,tag)
             else:
                 url = "https://{}{}{}".format(self.server,self.API_BASE,path.format(self.tenantid))
@@ -921,7 +929,6 @@ class SW(CATS):
         }
         if sourceip or targetip:
             hosts = []
-            index = 0
             if sourceip:
                 t = { "ipAddress": sourceip,"type":"source"}
                 hosts.append(t)
@@ -1294,6 +1301,10 @@ class AMP(CATS):
         rsp = self.apirequest(api_call)
         return rsp
 
+    def computerDelete(self,guid):
+        api_call = "/v1/computers/{}".format(guid)
+        self.apideleterequest(api_call)
+
 
     def computerTrajectory(self,guid,search=""):
 ### optional search par to search for ip, sha etc (like in console
@@ -1358,6 +1369,53 @@ class AMP(CATS):
         rsp = self.apideleterequest(api_call)
         return rsp
 
+    def groups(self,groupname=""):
+        api_call = "/v1/groups/"
+        rsp = self.apirequest(api_call)
+        return rsp
+
+class ORBITAL(CATS):
+
+    def __init__(self,client_id,client_password,debug=False,logfile="",cloud="us"):
+        CATS.__init__(self,debug,logfile)
+        self.client_id = client_id
+        self.client_password = client_password
+        self.api_url = "https://orbital.amp.cisco.com"
+        if cloud=="eu":
+            self.api_url ="https://orbital.api.eu.cisco.com"
+        if cloud=="apjc":
+            self.api_url ="https://orbital.api.apjc.cisco.com"
+
+    def get_token(self):
+        headers = {}
+        bencode = base64.b64encode((self.client_id + ":" + self.client_password).encode())
+        headers["Authorization"] = "Basic " + bencode.decode()
+
+        #headers = {"Authorization": self.client_id + ":" + self.client_password}
+        # rsp = self.get(url="{}:{}@self.api_url/v0/oauth2/token".format(self.client_id,self.client_password),headers={},verify=True)
+        # data = "{}:{}".format(self.client_id,self.client_password)
+        rsp = self.post(self.api_url+"/v0/oauth2/token",headers=headers,data={},verify=True)
+        self.token = rsp["token"]
+        self.expiry = rsp["expiry"]
+       
+    def query(self,query,nodes):
+        headers = {"Authorization": "Bearer " + self.token}
+
+        data = {
+            "osQuery" : [{"sql":"SELECT * FROM processes;"}],
+        #    "nodes"   : ["host:VMRAT33"]
+             "nodes"   : ["ip:10.1.33.33"]
+        }
+        rsp = self.post(url=self.api_url+"/v0/query",headers=headers,data=json.dumps(data),verify=True)
+        print(rsp)
+        self.job_id = rsp["ID"]
+        return (rsp)
+
+    def results(self):
+        headers = {"Authorization": "Bearer " + self.token}
+        rsp = self.get(url=self.api_url+"/v0/jobs/"+self.job_id+"/results",headers=headers,verify=True)
+        return rsp
+
 
 class UMBRELLA(CATS):
 
@@ -1420,13 +1478,11 @@ class UMBRELLA(CATS):
         return(self.get(headers=headers,url=url,verify=True))
 
     def reportSecurityActivity(self,days=0,hours=1,minutes=0):
-        headers = {}
+        # headers = {}
 
         time_to = datetime.utcnow()
         time_from = datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))
-        s1 = str(time_from.timestamp())
         start = str(time_from.timestamp())[:-7]
-        s2 = str(time_to.timestamp())
         stop = str(time_to.timestamp())[:-7]
         url = "https://reports.api.umbrella.com/v1/organizations/{}/security-activity?start={}&stop={}".format(self.orgid,start,stop)
 #        url = "https://reports.api.umbrella.com/v1/organizations/{}/security-activity".format(self.orgid)
@@ -1575,7 +1631,7 @@ class CTR(CATS):
     
 
     def create_casebook(self,casebook_name,casebook_title,casebook_description,observables_string):
-        timenow = datetime.utcnow()
+        # timenow = datetime.utcnow()
         d = date.today()
         start_date = d.strftime("%Y-%m-%d")
         casebook_obj_json = {}
@@ -1601,11 +1657,8 @@ class CTR(CATS):
             'Accept': 'application/json'
         }
         data = json.dumps(casebook_obj_json)
-        temp = json.loads(data)
         return (self.post('https://private.intel.amp.cisco.com/ctia/casebook', headers=headers, data=data,verify=True))
-        '''
-        return (self.post('https://visibility.amp.cisco.com/ctia/casebook', headers=headers, data=data,verify=True))
-        '''
+     
     def get_casebook(self,id):
         id = urllib.parse.quote(id,safe='')
         bearer_token = 'Bearer ' + self.access_token
@@ -1825,7 +1878,7 @@ class ISE_PXGRID(CATS):
             self.password  =  self.pxpassword
             self.pxusername = rsp["userName"]
             if self.pxusername != self.nodename:
-                print("NODENAME AND PX USERNAME DIFFERERENT")
+                self.log_debug("NODENAME AND PX USERNAME DIFFERERENT")
                 return
 
     def activate(self):
@@ -2171,11 +2224,11 @@ class DUO_ADMIN(CATS):
                 raise RuntimeError(self.exception_string(err)) from err                                            
 
 
-    def userCreate(self,username, upn, email):
+    def userCreate(self,username, email):
         if email == None or email == "<no value>":
-            post_data = {"username": upn, "status": "active"}
+            post_data = {"username": username, "status": "active"}
         else:
-    	    post_data = {"username": upn, "email":email,"status": "active"}
+    	    post_data = {"username": username, "email":email,"status": "active"}
 
         service_url = "/admin/v1/users"
 
@@ -2188,13 +2241,13 @@ class DUO_ADMIN(CATS):
 
 
 
-    def userEnroll(self,upn, email):
+    def userEnroll(self,username, email):
         if email == None or email == "<no value>":
-            print("ERROR: no email address.")
+            self.log_debug("ERROR: no email address.")
             return None
         #POST /admin/v1/users/enroll
         service_url_enroll ="/admin/v1/users/enroll"
-        post_data = {"username": upn, "email":email}
+        post_data = {"username": username, "email":email}
         params1= self.sign("POST", self.duo_host, service_url_enroll, post_data)
         params2= self.merge_two_dicts(self.duo_headers, params1)
         encoded_headers = self.encode_headers(params2)
@@ -2211,6 +2264,27 @@ class DUO_ADMIN(CATS):
         return(rsp)
         
 
+class WEBEX(CATS):
 
+    def __init__(self,roomid,token,debug=False,logfile=""):
+        CATS.__init__(self,debug,logfile)
+        self.roomid = roomid
+        self.token = token
+        self.debug = debug
 
+    def postmessage(self,message,markdown):
+
+        headers = {
+                    "Content-type":"application/json",
+                    "Accept":"application/json",
+                    "Authorization":"Bearer " + self.token
+                   }
+        
+        url = "https://webexapis.com" + "/v1/messages"
+        data = {
+            "roomId": self.roomid,
+            "message": message,
+            "markdown": markdown,
+        }
+        rsp = self.post(url=url,headers=headers,data=json.dumps(data),verify=True)
 
