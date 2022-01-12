@@ -444,6 +444,58 @@ class FMC(CATS):
         url = self.server+api_path
         return (self.put(url=url,data=put_data,headers=self.headers,verify=False))
 
+    def getAccessPolicies(self):
+        return self.fmcget(api="/policy/accesspolicies")
+
+    def getAccessPolicyRules(self,accesspolicy_id):
+        return self.fmcget(api="/policy/accesspolicies/{}/accessrules".format(accesspolicy_id))
+
+    def getAccessPolicyRule(self,accesspolicy_id,rule_id):
+        return self.fmcget(api="/policy/accesspolicies/{}/accessrules/{}".format(accesspolicy_id,rule_id))
+
+    def getAccessPolicyRulesByPolicyName(self,policy_name):
+        final_result = {"items": []}
+        rsp = self.getAccessPolicies()
+        items = rsp["items"]
+        policy_id = ""
+
+        for item in items:
+                if item["name"] == policy_name:
+                        policy_id = item["id"]
+        if policy_id:
+            rsp = self.getAccessPolicyRules(policy_id)
+            items = rsp["items"]
+            for item in items:
+                rule_id = item["id"]
+                rsp = self.getAccessPolicyRule(policy_id,rule_id)
+                final_result["items"].append(rsp)
+            return(final_result)
+        else:
+            errorstring = "Could not perform operation - could not finde policy {}".format(policy_name)
+            self.log_debug(errorstring)                
+            raise ValueError(errorstring)
+
+    def getNetworkObjects(self):
+        return self.fmcget(api="/object/networks")
+    
+    def getNetworkObjectByName(self,name):
+        rsp = self.fmcget(api="/object/networks")
+        items = rsp["items"]
+        for item in items:
+            if item["name"] == name:
+                return item
+        return None
+
+    def createNetworkObject(self,name,value="",overridable=False,description="",objecttype="Network"):
+        postdata = json.dumps({"name":name,
+                    "value":value,
+                    "overridable": overridable,
+                    "description": description,
+                    "type":objecttype})
+        rsp = self.fmcpost(api="/object/networks",post_data=postdata)
+
+
+
     def configure_interface(self,devicename,ifname,name,ipv4address,ipv4mask):
         rsp = self.fmcget(api="/devices/devicerecords")
         device_id = ""
@@ -1420,9 +1472,10 @@ class ORBITAL(CATS):
         headers = {"Authorization": "Bearer " + self.token}
 
         data = {
-            "osQuery" : [{"sql":"SELECT * FROM processes;"}],
+        #  "osQuery" : [{"sql":"SELECT * FROM processes;"}],
         #    "nodes"   : ["host:VMRAT33"]
-             "nodes"   : ["ip:10.1.33.33"]
+              "stock": "forensic-snapshot-windows-0.0.9",
+             "nodes"   : ["ip:10.1.37.2"]
         }
         rsp = self.post(url=self.api_url+"/v0/query",headers=headers,data=json.dumps(data),verify=True)
         print(rsp)
@@ -1437,24 +1490,53 @@ class ORBITAL(CATS):
 
 class UMBRELLA(CATS):
 
-    def __init__(self,investigate_token="",enforce_token="",key="",secret="",orgid="",debug=False,logfile=""):
+    def __init__(self,investigate_token="",enforce_token="",key="",secret="",mkey="",msecret="",orgid="",debug=False,logfile=""):
         CATS.__init__(self,debug,logfile)
         self.investigate_token = investigate_token
         self.enforce_token = enforce_token        
         self.key = key 
         self.secret = secret
+        self.mkey = mkey
+        self.msecret = msecret
         self.orgid = orgid
         
 
-    def getDevices(self):
+    def management_headers(self):
+        headers = {}
+        key = self.mkey
+        secret = self.msecret
+        toencode = key + ":" + secret
+        bencoded = base64.b64encode(toencode.encode())
+        #bencoded = base64.b64encode(toencode)
+        headers["Authorization"] = "Basic " + bencoded.decode()
+        #headers["Authorization"] = "Basic " + bencoded
+        return (headers)
+
+    def auth_headers(self):
         headers = {}
         key = self.key
         secret = self.secret
         toencode = key + ":" + secret
         bencoded = base64.b64encode(toencode.encode())
+        #bencoded = base64.b64encode(toencode)
         headers["Authorization"] = "Basic " + bencoded.decode()
-        url = "https://management.api.umbrella.com/v1/organizations/{}/networkdevices/".format(self.orgid)
-        return(self.get(headers=headers,url=url,verify=True))        
+        #headers["Authorization"] = "Basic " + bencoded
+        return (headers)
+
+    def getOrganizations(self):
+        headers = self.auth_headers()
+        url = "https://management.api.umbrella.com/v1/organizations"
+        return(self.get(headers=headers,url=url,verify=True))      
+    def getDevices(self):
+        headers = self.management_headers()
+        url = "https://management.api.umbrella.com/v1/organizations/{}/networkdevices".format(self.orgid)
+        return(self.get(headers=headers,url=url,verify=True))      
+
+    def getDestinationLists(self):
+        headers = self.management_headers()
+        url = "https://management.api.umbrella.com/v1/organizations/{}/destinationlists".format(self.orgid)
+        return(self.get(headers=headers,url=url,verify=True))      
+
 
     def listEnforcement(self):
 
