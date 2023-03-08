@@ -44,9 +44,9 @@ def print_help():
     sys.exit()
 def main(argv):
 
-    server = "1.1.1.1"
+    server = "100.120.120.35"
     username = "admin"
-    password = "insertyourown"
+    password = "C!sco123"
     tag = ""
     debug = False
     sourceip = ""
@@ -58,7 +58,7 @@ def main(argv):
     operation = "secevents"
     eventids = []
     try:
-        opts, args = getopt.getopt(argv,'-hds:u:p:o:D:H:M:e:',['sip=','ptag='])
+        opts, args = getopt.getopt(argv,'-hds:u:p:o:D:H:M:e:t:',['sip=','ptag='])
         for opt, arg in opts:
             if opt == '-h':
                 print_help()
@@ -83,6 +83,8 @@ def main(argv):
                 minutes = int(arg)
             if opt == ("-H"):
                 hours = int(arg)
+            if opt == ("-t"):
+                tag = arg
             if opt == ("-e"):
                eventid = int(arg)
                eventids.append(eventid)
@@ -117,7 +119,7 @@ def main(argv):
         rsp = sw.getFlows([subjectip])
         print(json.dumps(rsp,indent=4,sort_keys=True))
     if operation == "gethostgroups":
-        rsp = sw.getHostGroups()
+        rsp = sw.getHostGroups(tag=tag)
         print(json.dumps(rsp,indent=4,sort_keys=True))
     if operation == "getcognitive":
         rsp = sw.getCognitiveIncidents(ip=subjectip)

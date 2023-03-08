@@ -1,4 +1,5 @@
 #!/usr/bin/python3                                                                                                                         
+#VERSION 2.0
 import json
 import sys
 import requests
@@ -19,6 +20,7 @@ from requests.auth import HTTPBasicAuth
 import ssl
 import email, hmac, hashlib
 import six
+import codecs
 
 
 class CatsException(Exception):
@@ -83,8 +85,8 @@ class CATS:
                 self.log_debug("text is " + r.text)
                 json_response = json.loads(r.text)
                 json_response = r.json()
-                result = { "catsresult": "OK", "info": "GET successful"  }
-                json_response.update(result)
+                #result = { "catsresult": "OK", "info": "GET successful"  }
+                #json_response.update(result)
                 return json_response
             else:
                 errorstring = "Error in get url:{} statuscode:{} text {}".format(url,str(status_code),r.text)                                
@@ -812,40 +814,66 @@ class SW(CATS):
         self.password = password
         self.tenantid = ""
         self.cookie   = ""
+        XSRF_HEADER_NAME = 'X-XSRF-TOKEN'
         try:
-            self.authenticate()
-            url = "https://{}{}/tenants".format(self.server,self.API_BASE)
-
-            headers = {
-                 "Content-Type":"application/json",
-                 "Cookie": self.cookie
-            }
-            rsp = self.get(url=url,headers=headers,verify=False)
-            self.tenantid = str(rsp["data"][0]["id"])
-            self.log_debug("tenantid: " + self.tenantid)
+            
+            url = "https://{}/token/v2/authenticate".format(self.server)
+            #data = "username={}&password={}".format(self.username,self.password)
+            data = {
+                "username": self.username,
+                "password": self.password
+            }           
+            self.api_session = requests.Session()
+            self.log_debug("Trying to establish session to {} with username {} {}".format(self.server,self.username,self.password))
+            response = self.api_session.request("POST", url, verify=False, data=data)
+            if(response.status_code == 200):
+                # Set XSRF token for future requests
+                for cookie in response.cookies:
+                    if cookie.name == 'XSRF-TOKEN':
+                        self.api_session.headers.update({XSRF_HEADER_NAME: cookie.value})
+                    break
+                url = 'https://' + self.server + '/sw-reporting/v1/tenants/'
+                rsp = self.get(url, verify=False)
+                tenant_list = rsp["data"]
+                self.tenantid = str(tenant_list[0]["id"])
+                self.log_debug("tenantid: " + self.tenantid)
+            else:
+                pass 
+            if not self.tenantid:
+                raise RuntimeError("authentication or retrieving tenant failed")  
         except Exception as err:
             raise RuntimeError(self.exception_string(err)) from err                        
     
-    def authenticate(self):
-        url = "https://{}/token/v2/authenticate".format(self.server)
-        headers = {
-                "Content-Type": "application/x-www-form-urlencoded"
-        }
-        data = "username={}&password={}".format(self.username,self.password)
-        self.post(url=url,headers=headers,data=data,verify=False)
-        # self.post will set self.cookie
+    # OVERLOADING GET FUNCTION
+    def get(self,url,verify=False,headers={}):
+        response = self.api_session.request("GET",url,verify)
+        if response.status_code == 200:
+            return json.loads(response.content)
+        else:
+            raise RuntimeError("Invalid status code {} {}".format(str(response.status_code),str(response.content))) 
+        
 
-    def getHostGroups(self):
+    def post(self,url,data,headers={},verify=False):
+        self.api_session.headers.update({"Content-Type":"application/json"})
+        jdata = json.dumps(data)
+        response = self.api_session.request("POST",url,verify=verify,data=jdata)
+        if (response.status_code//100) == 2:
+            return json.loads(response.content)
+        else:
+            raise RuntimeError("Invalid status code {} {}".format(str(response.status_code),str(response.content))) 
 
-        self.authenticate()        
+    def getHostGroups(self,tag=None):
+      
         url = "https://{}/smc-configuration/rest/v1/tenants/{}/tags".format(self.server,self.tenantid)
+        if tag:
+            url = url + "/" + tag
 #       url = 'https://' + SMC_HOST + '/smc-configuration/rest/v1/tenants/' + SMC_TENANT_ID + '/tags/'        
 
         headers = {
             "Content-Type":"application/json",
                     "Cookie": self.cookie
         }
-        return (self.get(url=url,headers=headers,verify=False))
+        return (self.get(url=url,verify=False))
 
     def getCognitiveIncidents(self,ip):
 
@@ -860,7 +888,7 @@ class SW(CATS):
         Requesting data for any specific tenant will result in error.)
 
         '''
-        self.authenticate()                
+                
         url = "https://{}/sw-reporting/v2/tenants/0/incidents?ipAddress={}".format(self.server,ip)
 #        url = 'https://' + SMC_HOST + '/sw-reporting/v2/tenants/0/incidents?ipAddress=' + MALICIOUS_IP
 
@@ -870,9 +898,7 @@ class SW(CATS):
         }
         return (self.get(url=url,headers=headers,verify=False))
 
-    def eventList(self):
-        
-        self.authenticate()        
+    def eventList(self):      
         url = "https://{}/sw-reporting/v1/tenants/{}/security-events/templates".format(self.server,self.tenantid)
         headers = {
             "Content-Type":"application/json",
@@ -902,13 +928,8 @@ class SW(CATS):
     
     def postSWdata(self,path,data):
 
-        headers = {
-                    "Content-Type":"application/json",
-                    "Cookie": self.cookie
-        }
         url = "https://{}{}{}".format(self.server,self.API_BASE,path)
-        jsondata = json.dumps(data)
-        return (self.post(url=url,headers=headers,data=jsondata,verify=False))
+        return (self.post(url=url,data=data,verify=False))
             
     def search(self,search,data,wait=3):
         headers = {
@@ -967,8 +988,7 @@ class SW(CATS):
     def searchSecurityEvents(self,days=0,hours=0,minutes=0,sourceip="",targetip="",seceventids=[],wait=3):
 #
 #  weird, different time format reuired for flow reports compated to security events
-#
-        self.authenticate()        
+#       
         time_to = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
         time_from = (datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))).strftime('%Y-%m-%dT%H:%M:%SZ')
 
@@ -1181,8 +1201,7 @@ class SW(CATS):
 
     '''
     def getFlows(self,sip=[],shostgroup=[],pip=[],phostgroups=[],days=0,hours=1,minutes=0):
-
-        self.authenticate()                
+               
         url = "https://{}/sw-reporting/v2/tenants/{}/flows/queries".format(self.server,self.tenantid)
 
         # Set the timestamps for the filters, in the correct format, for last 60 minutes
@@ -1224,7 +1243,7 @@ class SW(CATS):
         request_data["peer"]["hostGroups"]["includes"] = phostgroups
             
         headers = {'Content-type': 'application/json', 'Accept': 'application/json','Cookie':self.cookie}
-        rsp = self.post(url=url,data=json.dumps(request_data),headers=headers,verify=False)
+        rsp = self.post(url=url,data=request_data,headers=headers,verify=False)
         self.log_debug("generating result, please wait")
         id = rsp["data"]["query"]["id"]
         url = "https://{}/sw-reporting/v2/tenants/{}/flows/queries/{}".format(self.server,self.tenantid,id)
@@ -1468,24 +1487,113 @@ class ORBITAL(CATS):
         self.token = rsp["token"]
         self.expiry = rsp["expiry"]
        
-    def query(self,query,nodes):
+    def stock_query(self,stock_query,nodes):
         headers = {"Authorization": "Bearer " + self.token}
 
         data = {
         #  "osQuery" : [{"sql":"SELECT * FROM processes;"}],
         #    "nodes"   : ["host:VMRAT33"]
-              "stock": "forensic-snapshot-windows-0.0.9",
-             "nodes"   : ["ip:10.1.37.2"]
+        #      "stock": "forensic-snapshot-windows-0.0.9",
+        #     "nodes"   : ["ip:10.1.33.17"],
+        #     "stock" : "logged_in_users"
+            "name" : "catsquery",
+            "interval": 0,
+            "nodes": nodes,
+            "stock": stock_query
         }
         rsp = self.post(url=self.api_url+"/v0/query",headers=headers,data=json.dumps(data),verify=True)
-        print(rsp)
+       
         self.job_id = rsp["ID"]
         return (rsp)
 
-    def results(self):
+    def jobs(self,job_id):
         headers = {"Authorization": "Bearer " + self.token}
-        rsp = self.get(url=self.api_url+"/v0/jobs/"+self.job_id+"/results",headers=headers,verify=True)
+        url = self.api_url + "/v0/jobs/"+job_id 
+        rsp = self.get(url=url,headers=headers,verify=True)
+        return(rsp)
+    
+    def results(self,job_id):
+        headers = {"Authorization": "Bearer " + self.token}
+        url = self.api_url + "/v0/jobs/"+job_id + "/results"
+        data = "limit=100"
+        rsp = self.get(url=url,headers=headers,verify=True)
+
         return rsp
+
+
+class UMBRELLA2(CATS):
+    def __init__(self,key="",secret="",debug=False,logfile=""):
+        CATS.__init__(self,debug,logfile) 
+        self.token_url = "https://api.umbrella.com/auth/v2/token" 
+        self.token_url = "https://{}:{}@api.umbrella.com/auth/v2/token".format(key,secret)
+        self.key = key 
+        self.secret = secret
+        self.verify = True
+        self.acquire_oauth2_token()
+
+    def acquire_oauth2_token(self):
+        headers = {}
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+        #    'Authorization':""
+        }
+        key = self.key
+        secret = self.secret
+        toencode = key + ":" + secret
+        bencoded = base64.b64encode(toencode.encode())
+        #headers["Authorization"] = "Basic " + bencoded.decode()
+        data = {
+            'grant_type': 'client_credentials'
+        }
+        rsp = self.post(url=self.token_url,headers=headers,data=json.dumps(data),verify=self.verify)
+        self.access_token = rsp["access_token"]
+        self.headers =  headers = {
+            'Accept': 'application/json',
+            'Authorization': "Bearer " + self.access_token
+        }
+
+
+    def admin_users(self):
+        
+        url = "https://api.umbrella.com/admin/v2/users"
+        rsp = self.get(url=url,headers=self.headers,verify=self.verify)
+        return(rsp)
+
+    def identities(self,limit=100,offset=0):
+        url = "https://api.umbrella.com/reports/v2/identities?limit={}&offset={}".format(str(limit),str(offset))
+        rsp = self.get(url=url,headers=self.headers,verify=self.verify)
+        return(rsp)
+
+    def categories(self,limit=100,offset=0):
+        url = "https://api.umbrella.com/reports/v2/categories?limit={}&offset={}".format(str(limit),str(offset))
+        rsp = self.get(url=url,headers=self.headers,verify=self.verify)
+        return(rsp)
+
+    def reports_activity_dns(self,start="-1days",stop="now",limit="100",ip=None,identityids=None,categories=None,domains=None):
+       
+        '''time_to = datetime.utcnow()
+        time_from = datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))
+        start = str(time_from.timestamp())[:-7]
+        stop = str(time_to.timestamp())[:-7]
+        start = start + "000"
+        stop  = stop + "000"
+        print(start)
+        print(stop)
+        '''
+        stop = "now"
+        start = "-1days"
+        url = "https://api.umbrella.com/reports/v2/activity/dns?from={}&to={}&limit={}".format(start,stop,limit)
+        if ip:
+            url = url + "&ip={}".format(ip)
+        if identityids:
+            url = url + "&identityids={}".format(identityids)
+        if categories:
+            url = url + "&categories={}".format(categories)
+        if domains:
+            url = url + "&domains={}".format(domains)
+        rsp = self.get(url=url,headers=self.headers,verify=self.verify)
+        return(rsp)
 
 
 class UMBRELLA(CATS):
@@ -1658,6 +1766,11 @@ class CTR(CATS):
                 self.access_token = (rsp_dict['access_token'])
                 self.scope = (rsp_dict['scope'])
                 self.expiration_time = (rsp_dict['expires_in'])
+                self.headers = {
+                    'Authorization': 'Bearer ' + self.access_token,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
                 return None
             else:
                 errorstring = "Access token request failed, status code: {response.status_code}"
@@ -1669,65 +1782,37 @@ class CTR(CATS):
     ''' Given raw text, return structured observables'''
     def get_observables(self,raw_text):
 
-        bearer_token = 'Bearer ' + self.access_token
-        headers = {
-            'Authorization': bearer_token,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
         data = json.dumps({"content":raw_text})
-        return (self.post('https://visibility.amp.cisco.com/iroh/iroh-inspect/inspect', headers=headers, data=data,verify=True))
+        return (self.post('https://visibility.amp.cisco.com/iroh/iroh-inspect/inspect', headers=self.headers, data=data,verify=True))
 
     ''' Given observables, enrich with verdict/judgeent '''
     def enrich_observables(self,observables):
         enrich_url = 'https://visibility.amp.cisco.com/iroh/iroh-enrich/deliberate/observables'
-        bearer_token = 'Bearer ' + self.access_token
-        headers = {
-            'Authorization': bearer_token,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
         data = json.dumps(observables)
-        return (self.post(enrich_url, headers=headers, data=data,verify=True))
+        return (self.post(enrich_url, headers=self.headers, data=data,verify=True))
 
     ''' Given observables, what actions can be performed by different modules (e.g isolate host, AO etc '''        
     def get_actions_for_observables(self,observables): 
 
-        bearer_token = 'Bearer ' + self.access_token
-        headers = {
-            'Authorization': bearer_token,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
         # grab the type of the observable, that is needed
 #        rsp= self.get_observables(observable)
 #        type_of_observable = rsp[0]['type']        
 
 #        data = json.dumps([{"value":observable, "type":type_of_observable}])
         data = json.dumps(observables)
-        return (self.post('https://visibility.amp.cisco.com/iroh/iroh-response/respond/observables', headers=headers, data=data,verify=True))
+        return (self.post('https://visibility.amp.cisco.com/iroh/iroh-response/respond/observables', headers=self.headers, data=data,verify=True))
 
 
     def get_observe_observables(self,observables):
-        bearer_token = 'Bearer ' + self.access_token
-        headers = {
-            'Authorization': bearer_token,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
+        
         data = json.dumps(observables)
-        return (self.post('https://visibility.amp.cisco.com/iroh/iroh-enrich/observe/observables', headers=headers, data=data,verify=True))
+        return (self.post('https://visibility.amp.cisco.com/iroh/iroh-enrich/observe/observables', headers=self.headers, data=data,verify=True))
     
     def get_sightings_for_observables(self,observables):
-        bearer_token = 'Bearer ' + self.access_token
-        headers = {
-            'Authorization': bearer_token,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
+       
         otype = observables[0]["type"]
         ovalue = observables[0]["value"]
-        return (self.get('https://private.intel.amp.cisco.com/ctia/{}/{}/sightings'.format(otype,ovalue), headers=headers,verify=True))
+        return (self.get('https://private.intel.amp.cisco.com/ctia/{}/{}/sightings'.format(otype,ovalue), headers=self.headers,verify=True))
     
 
     def create_casebook(self,casebook_name,casebook_title,casebook_description,observables_string):
@@ -1736,11 +1821,14 @@ class CTR(CATS):
         start_date = d.strftime("%Y-%m-%d")
         casebook_obj_json = {}
         casebook_obj_json["type"] = "casebook"
-        casebook_obj_json["title"] = casebook_name + start_date
+        casebook_obj_json["title"] = casebook_name + " " +  start_date
         casebook_obj_json["texts"] = []
-        observables = json.loads(observables_string)
+        if observables_string:
+            observables = json.loads(observables_string)
+        else:
+            observables = []
         casebook_obj_json["observables"] = observables
-        casebook_obj_json["short_description"] = casebook_description
+        casebook_obj_json["short_description"] = "short description..."
         casebook_obj_json["description"] = casebook_description
         casebook_obj_json["schema_version"] = "1.0.11"
 
@@ -1749,26 +1837,15 @@ class CTR(CATS):
         casebook_obj_json["source"] = "ao"
 
         casebook_obj_json["tlp"] = "amber"
-
-        bearer_token = 'Bearer ' + self.access_token
-        headers = {
-            'Authorization': bearer_token,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
+       
         data = json.dumps(casebook_obj_json)
-        return (self.post('https://private.intel.amp.cisco.com/ctia/casebook', headers=headers, data=data,verify=True))
+        return (self.post('https://private.intel.amp.cisco.com/ctia/casebook', headers=self.headers, data=data,verify=True))
      
     def get_casebook(self,id):
         id = urllib.parse.quote(id,safe='')
-        bearer_token = 'Bearer ' + self.access_token
-        headers = {
-            'Authorization': bearer_token,
-#            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
+
         url = "https://private.intel.amp.cisco.com/ctia/casebook/{}".format(id)
-        return self.get(headers=headers,url=url,verify=True)
+        return self.get(headers=self.headers,url=url,verify=True)
 
     def delete_casebook(self,id):
         id = urllib.parse.quote(id,safe='')
@@ -1779,7 +1856,7 @@ class CTR(CATS):
             'Accept': 'application/json'
         }
         url = "https://private.intel.amp.cisco.com/ctia/casebook/{}".format(id)
-        return self.delete(headers=headers,url=url,verify=True)
+        return self.delete(headers=self.headers,url=url,verify=True)
         
     def add_casebook_observables(self,id,observables_string):
         observables = json.loads(observables_string)
@@ -1788,15 +1865,15 @@ class CTR(CATS):
                 "observables": observables
                }
         data = json.dumps(observables_update)
-        bearer_token = 'Bearer ' + self.access_token
-        headers = {
-            'Authorization': bearer_token,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
         id = urllib.parse.quote(id,safe='')
         url = "https://private.intel.amp.cisco.com/ctia/casebook/{}/observables".format(id)
-        return (self.post(url, headers=headers, data=data,verify=True))
+        return (self.post(url, headers=self.headers, data=data,verify=True))
+    
+    def create_incident(self,incident_info):
+        url = 'https://private.intel.amp.cisco.com/ctia/incident'
+        data = json.dumps(incident_info)
+        return(self.post(url,headers=self.headers,data=data,verify=True))
+                         
 
 class ISE_ANC(CATS):
     
@@ -2158,6 +2235,41 @@ class ISE_PXGRID(CATS):
 
 class DUO_ADMIN(CATS):
 
+    
+    def get_duo_headers(self,path,params):
+
+        """
+        Return HTTP Basic Authentication ("Authorization" and "Date") headers.
+        method, host, path: strings from request
+        params: dict of request parameters
+        skey: secret key
+        ikey: integration key
+        """
+        print("ikey" + self.api_ikey)
+        print("skey" + self.api_skey)
+        # create canonical string
+        method = "GET"
+        now = email.utils.formatdate()
+        canon = [now, method.upper(), self.duo_host.lower(), path]
+        args = []
+        for key in sorted(params.keys()):
+            val = params[key]
+            if isinstance(val, str):
+                val = val.encode("utf-8")
+                args.append('%s=%s' % (urllib.parse.quote(key, '~'), urllib.parse.quote(val, '~')))
+                canon.append('&'.join(args))
+                canon = '\n'.join(canon)
+
+        # sign canonical string
+        sig = hmac.new(codecs.encode(self.api_skey,'latin-1'), codecs.encode(str(canon)), hashlib.sha1)
+        auth = '%s:%s' % (self.api_ikey, sig.hexdigest())
+
+        headers = {"Date": now,
+                   "Authorization":'Basic %s' % base64.b64encode(codecs.encode(auth)).decode('utf-8'),
+                   "Host":self.duo_host,
+                   "Accept":"application/json"}
+        return (headers)
+    
     def encode_headers(self,params):
         """ encode headers """
         encoded_headers = {}
@@ -2250,7 +2362,16 @@ class DUO_ADMIN(CATS):
 
 
 
-
+    def integrations(self):
+        service_url = "/admin/v1/integrations"
+        params = {}
+    
+        headers = {}
+        headers = self.get_duo_headers(path=service_url,params=params)
+        
+        response=self.get(url="https://"+self.duo_host+service_url, headers=headers,verify=False)
+        return(response)
+    
     def logs(self, days=1,hours=0,minutes=0, users=""):
 
             time_to = datetime.utcnow()
@@ -2383,8 +2504,47 @@ class WEBEX(CATS):
         url = "https://webexapis.com" + "/v1/messages"
         data = {
             "roomId": self.roomid,
-            "message": message,
             "markdown": markdown,
         }
+
         rsp = self.post(url=url,headers=headers,data=json.dumps(data),verify=True)
 
+class AAD(CATS):
+    def __init__(self,tenant,client_id,client_secret,debug=False,logfile=""):
+        CATS.__init__(self,debug,logfile)
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.tenant = tenant
+        url = "https://login.microsoftonline.com/{}/oauth2/v2.0/token".format(self.tenant)
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded"
+            }
+        scope = "https://graph.microsoft.com/.default"
+        grant_type = "client_credentials"
+        data = "client_id={}&scope={}&client_secret={}&grant_type={}".format(client_id,scope,client_secret,grant_type)
+        rsp = self.post(url=url,headers=headers,data=data,verify=True)
+    
+        self.access_token = rsp["access_token"]
+
+    
+    
+    def getGroupsAndRolesByUPN(self,upn):
+        url = "https://graph.microsoft.com/v1.0/users/{}/memberOf".format(upn)
+        headers = {
+            "Accept": "application/json",
+            "Authorization": "Bearer {}".format(self.access_token)
+        }
+        rsp = self.get(url=url,headers=headers,verify=True)
+        return(rsp)
+    
+    def getRoles(self):
+        url = "https://graph.microsoft.com/v1.0/directoryRoles"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": "Bearer {}".format(self.access_token)
+        }
+        rsp = self.get(url=url,headers=headers,verify=True)
+        return(rsp)
+    
+
+    
