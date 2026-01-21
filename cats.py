@@ -229,7 +229,8 @@ class FTD(CATS):
                         'Accept': 'application/json',
                         'Authorization':'Bearer'
         }
-        path = "/api/fdm/v1/fdm/token"
+        # path = "/api/fdm/v1/fdm/token"
+        path = "/api/fdm/v6/fdm/token"
         self.server = "https://"+host
         url = self.server + path
         body = {
@@ -239,6 +240,7 @@ class FTD(CATS):
             }
         self.access_token = ""
         self.refresh_token = ""
+        self.apibase =  "/api/fdm/v6/"
 
         try:
             rsp = self.post(url, headers=self.headers,data=json.dumps(body), verify=False)
@@ -250,22 +252,22 @@ class FTD(CATS):
             raise RuntimeError(self.exception_string(err)) from err            
 
     def ftdget(self,api):
-        api_path= "/api/fdm/v1" + api
+        api_path= self.apibase + api
         url = self.server+api_path
         return (self.get(url=url,headers=self.headers,verify=False))
         
     def ftdpost(self,api,post_data):
-        api_path= "/api/fdm/v1/" + api
+        api_path= self.apibase + api
         url = self.server+api_path
         return (self.post(url=url,data=json.dumps(post_data),headers=self.headers,verify=False))
 
     def ftdput(self,api,data):
-        api_path= "/api/fdm/v1/" + api
+        api_path= self.apibase + api
         url = self.server+api_path
         return (self.put(url=url,data=json.dumps(data),headers=self.headers,verify=False))
     
     def ftddelete(self,api):
-        api_path= "/api/fdm/v1/" + api
+        api_path= self.apibase + api
         url = self.server+api_path
         return (self.delete(url=url,headers=self.headers,verify=False))
     
@@ -281,7 +283,7 @@ class FTD(CATS):
         return(None)
         
     def interfaces_get(self,name=""):
-        return (self.ftdget("/devices/default/interfaces?limit=10000"))
+        return (self.ftdget("devices/default/interfaces?limit=10000"))
 
     def interface_change_by_name(self,hardwarename,ifname,ipv4address,ipv4mask):
         putdata = {
@@ -366,7 +368,7 @@ class FTD(CATS):
         return(self.ftdpost("object/networks",postdata))
 
     def network_objects_get(self,name=""):
-        return (self.ftdget("/object/networks?limit=10000"))
+        return (self.ftdget("object/networks?limit=10000"))
 
     def network_object_delete_by_name(self,name):
         rsp = self.network_objects_get()
@@ -426,7 +428,7 @@ class FMC(CATS):
             self.headers['X-auth-access-token'] = token
             if token == None:
                 self.log_debug("No Token found, I'll be back terminating....")
-                return None
+                raise ValueError("No token in response!")
         except Exception as err:
             raise RuntimeError(self.exception_string(err)) from err                                        
 
@@ -446,6 +448,9 @@ class FMC(CATS):
         url = self.server+api_path
         return (self.put(url=url,data=put_data,headers=self.headers,verify=False))
 
+    def getFileTypes(self):
+        return self.fmcget(api="/object/filetypes?offset=0&limit=300")
+    
     def getAccessPolicies(self):
         return self.fmcget(api="/policy/accesspolicies")
 
@@ -497,7 +502,198 @@ class FMC(CATS):
         rsp = self.fmcpost(api="/object/networks",post_data=postdata)
 
 
+    def createAccessPolicy(self,name,defaultAction="BLOCK"):
+        postdata = json.dumps({"name":name,
+                    "name":name,
+                    "type":"AccessPolicy",
+                    "defaultAction": {
+                        "action": defaultAction
+                    }})
+        rsp = self.fmcpost(api="/policy/accesspolicies",post_data=postdata)
+        return(rsp)
 
+    def getZoneUUID(self,zoneName):
+        rsp = self.fmcget(api="/object/securityzones")
+        items = rsp["items"]
+        zoneUUID = 0
+        for i in items:
+            if i["name"] == zoneName:
+                zoneUUID = i["id"]
+                break
+        return zoneUUID
+    
+    def getAccessPolicyUUID(self,policyName):
+        rsp = self.fmcget(api="/policy/accesspolicies")
+        items = rsp["items"]
+        policyUUID = 0
+        for i in items:
+            if i["name"] == policyName:
+                policyUUID = i["id"]
+                break
+        return policyUUID
+
+    def createAccessPolicyRule(self,policyName,ruleName,sourceZone,destinationZone):
+
+        policyUUID = self.getAccessPolicyUUID(policyName)
+        szUUID = self.getZoneUUID(sourceZone)
+        dzUUID = self.getZoneUUID(destinationZone)
+        postdata = json.dumps({
+            "action": "ALLOW",
+            "enabled": True,
+            "type": "AccessRule",
+            "name": ruleName,
+            "sendEventsToFMC": True,
+            "logBegin": True,
+            "logEnd": True,
+  
+            "sourceZones": {
+                "objects": [
+                {
+                    "name": sourceZone,
+                    "id": szUUID,
+                    "type": "SecurityZone"
+                }
+                ]
+            },
+            "destinationZones": {
+                "objects": [
+                {
+                "name": destinationZone,
+                "id": dzUUID,
+                "type": "SecurityZone"
+                }
+                ]
+            },
+  
+        })
+        rsp = self.fmcpost(api="/policy/accesspolicies/{}/accessrules".format(policyUUID),post_data=postdata)
+
+    def getAccessPolicies(self):
+        return self.fmcget(api="/policy/accesspolicies")
+
+    def getAccessPolicyRules(self,accesspolicy_id):
+        return self.fmcget(api="/policy/accesspolicies/{}/accessrules".format(accesspolicy_id))
+
+    def getAccessPolicyRule(self,accesspolicy_id,rule_id):
+        return self.fmcget(api="/policy/accesspolicies/{}/accessrules/{}".format(accesspolicy_id,rule_id))
+
+    def getAccessPolicyRulesByPolicyName(self,policy_name):
+        final_result = {"items": []}
+        rsp = self.getAccessPolicies()
+        items = rsp["items"]
+        policy_id = ""
+
+        for item in items:
+                if item["name"] == policy_name:
+                        policy_id = item["id"]
+        if policy_id:
+            rsp = self.getAccessPolicyRules(policy_id)
+            items = rsp["items"]
+            for item in items:
+                rule_id = item["id"]
+                rsp = self.getAccessPolicyRule(policy_id,rule_id)
+                final_result["items"].append(rsp)
+            return(final_result)
+        else:
+            errorstring = "Could not perform operation - could not finde policy {}".format(policy_name)
+            self.log_debug(errorstring)                
+            raise ValueError(errorstring)
+
+    def getNetworkObjects(self):
+        return self.fmcget(api="/object/networks")
+    
+    def getNetworkObjectByName(self,name):
+        rsp = self.fmcget(api="/object/networks")
+        items = rsp["items"]
+        for item in items:
+            if item["name"] == name:
+                return item
+        return None
+
+    def createNetworkObject(self,name,value="",overridable=False,description="",objecttype="Network"):
+        postdata = json.dumps({"name":name,
+                    "value":value,
+                    "overridable": overridable,
+                    "description": description,
+                    "type":objecttype})
+        rsp = self.fmcpost(api="/object/networks",post_data=postdata)
+
+    def createHostObject(self,name,value="",overridable=False,description="",objecttype="Host"):
+        postdata = json.dumps({"name":name,
+                    "value":value,
+                    "overridable": overridable,
+                    "description": description,
+                    "type":objecttype})
+        rsp = self.fmcpost(api="/object/hosts",post_data=postdata)
+    
+    def createSecurityZone(self,name,interfacemode):
+        postdata = json.dumps({
+            "type": "SecurityZone",
+            "name": name,
+            "interfaceMode": interfacemode,
+            "interfaces": []})
+        rsp = self.fmcpost(api="/object/securityzones",post_data=postdata)
+    
+    def createDeviceGroup(self,name):
+        postdata = json.dumps({"name":name,
+                    "name":name,
+                    "type":"DeviceGroup"})
+        rsp = self.fmcpost(api="/devicegroups/devicegrouprecords",post_data=postdata)
+        return(rsp)
+    def getPlatformPolicies(self):
+        rsp = self.fmcget(api="/policy/ftdplatformsettingspolicies")
+        return(rsp)
+    def getPlatformHTTPsettings(self,platformPolicy):
+        rsp = self.getPlatformPolicies()
+        items = rsp["items"]
+        platformUUID = 0
+        for i in items:
+            if i["name"] == platformPolicy:
+                platformUUID = i["id"]
+                break
+        rsp = self.fmcget(api="/policy/ftdplatformsettingspolicies/{}/httpaccesssettings/{}".format(platformUUID,platformUUID))
+        return(rsp)
+    def createPlatformPolicy(self,name):
+        postdata = json.dumps({"name":name,
+                    "name":name,
+                    "type":"FTDPlatformSettingsPolicy"})
+        rsp = self.fmcpost(api="/policy/ftdplatformsettingspolicies",post_data=postdata)
+    
+    def createPlatformHTTPsetting(self,platformPolicy,zone,networkobject,port=9443):
+        rsp = self.getPlatformPolicies()
+        items = rsp["items"]
+        platformUUID = 0
+        for i in items:
+            if i["name"] == platformPolicy:
+                platformUUID = i["id"]
+                break
+        zID = self.getZoneUUID(zoneName=zone)
+        postdata = json.dumps({
+        "id": platformUUID,
+        "enableHttpServer": True,
+        "port": port,
+        "httpConfiguration": [
+        {
+            "ipAddress": {
+                # "id": xxx,
+                "name": networkobject,
+                "type": "Network"
+            },
+            "interfaces": {
+                "objects": [
+                {
+                    "name": zone,
+                    "id": zID,
+                    "type": "SecurityZone"
+                },
+            ],
+            }
+        },
+        ]
+        })
+        rsp = self.fmcput(api="/policy/ftdplatformsettingspolicies/{}/httpaccesssettings/{}".format(platformUUID,platformUUID),put_data=postdata)
+        return(rsp)
+    
     def configure_interface(self,devicename,ifname,name,ipv4address,ipv4mask):
         rsp = self.fmcget(api="/devices/devicerecords")
         device_id = ""
@@ -824,6 +1020,7 @@ class SW(CATS):
                 "password": self.password
             }           
             self.api_session = requests.Session()
+            self.api_session.verify = False
             self.log_debug("Trying to establish session to {} with username {} {}".format(self.server,self.username,self.password))
             response = self.api_session.request("POST", url, verify=False, data=data)
             if(response.status_code == 200):
@@ -1291,7 +1488,7 @@ class TG(CATS):
 
 class AMP(CATS):
 
-    def __init__(self,cloud,api_client_id,api_key,debug=False,logfile=""):
+    def __init__(self,cloud,api_client_id,api_key,privatecloud="",debug=False,logfile=""):
         CATS.__init__(self,debug,logfile)
         self.api_client_id = api_client_id
         self.api_key       = api_key
@@ -1300,6 +1497,10 @@ class AMP(CATS):
             self.api_url ="https://api.eu.amp.cisco.com"
         if cloud=="apjc":
             self.api_url ="https://api.apjc.amp.cisco.com"
+        if cloud =="private":
+            self.api_url = "https://" + privatecloud
+        if not self.api_url:
+            raise ValueError("invalid cloud specification")
 
     def apirequest(self,apicall):
     
@@ -1487,8 +1688,10 @@ class ORBITAL(CATS):
         self.token = rsp["token"]
         self.expiry = rsp["expiry"]
        
-    def stock_query(self,stock_query,nodes):
-        headers = {"Authorization": "Bearer " + self.token}
+    def stock_query(self,stock,nodes):
+        headers = {"Authorization": "Bearer " + self.token,
+                   'Content-Type': 'application/x-www-form-urlencoded',
+                    'Accept': 'application/json'}
 
         data = {
         #  "osQuery" : [{"sql":"SELECT * FROM processes;"}],
@@ -1499,15 +1702,40 @@ class ORBITAL(CATS):
             "name" : "catsquery",
             "interval": 0,
             "nodes": nodes,
-            "stock": stock_query
+            "stock": stock
         }
-        rsp = self.post(url=self.api_url+"/v0/query",headers=headers,data=json.dumps(data),verify=True)
+        url="/v0/query"
+        rsp = self.post(url=self.api_url+url,headers=headers,data=json.dumps(data),verify=True)
+       
+        self.job_id = rsp["ID"]
+        return (rsp)
+    
+    def stock_script(self,stock,nodes):
+        headers = {"Authorization": "Bearer " + self.token,
+                   'Content-Type': 'application/x-www-form-urlencoded',
+                   'Accept': 'application/json'}
+
+        data = {
+        #  "osQuery" : [{"sql":"SELECT * FROM processes;"}],
+        #    "nodes"   : ["host:VMRAT33"]
+        #      "stock": "forensic-snapshot-windows-0.0.9",
+        #     "nodes"   : ["ip:10.1.33.17"],
+        #     "stock" : "logged_in_users"
+            "name" : "catsquery",
+            "interval": 0,
+            "nodes": nodes,
+            "stock": stock
+        }
+        url="/v0/script/run"
+        rsp = self.post(url=self.api_url+url,headers=headers,data=json.dumps(data),verify=True)
        
         self.job_id = rsp["ID"]
         return (rsp)
 
     def jobs(self,job_id):
-        headers = {"Authorization": "Bearer " + self.token}
+        headers = {"Authorization": "Bearer " + self.token,
+                   'Content-Type': 'application/x-www-form-urlencoded',
+                   'Accept': 'application/json'}
         url = self.api_url + "/v0/jobs/"+job_id 
         rsp = self.get(url=url,headers=headers,verify=True)
         return(rsp)
@@ -1594,151 +1822,69 @@ class UMBRELLA2(CATS):
             url = url + "&domains={}".format(domains)
         rsp = self.get(url=url,headers=self.headers,verify=self.verify)
         return(rsp)
+    
+    def investigate_pattern_search(self,pattern=".*z\.com",start="-1days"):
+        url = "https://api.umbrella.com/investigate/v2/search/{}?start={}&limit=100&type=HOST&includeCategory=true".format(pattern,start)
+        rsp = self.get(url=url,headers=self.headers,verify=self.verify)
+        return(rsp)
 
 
-class UMBRELLA(CATS):
 
-    def __init__(self,investigate_token="",enforce_token="",key="",secret="",mkey="",msecret="",orgid="",debug=False,logfile=""):
-        CATS.__init__(self,debug,logfile)
-        self.investigate_token = investigate_token
-        self.enforce_token = enforce_token        
+class CSA(CATS):
+    def __init__(self,key="",secret="",debug=False,logfile=""):
+        CATS.__init__(self,debug,logfile) 
+        
+        self.token_url = "https://{}:{}@api.umbrella.com/auth/v2/token".format(key,secret)
+
         self.key = key 
         self.secret = secret
-        self.mkey = mkey
-        self.msecret = msecret
-        self.orgid = orgid
-        
+        self.verify = True
+        self.acquire_oauth2_token()
 
-    def management_headers(self):
+    def acquire_oauth2_token(self):
         headers = {}
-        key = self.mkey
-        secret = self.msecret
-        toencode = key + ":" + secret
-        bencoded = base64.b64encode(toencode.encode())
-        #bencoded = base64.b64encode(toencode)
-        headers["Authorization"] = "Basic " + bencoded.decode()
-        #headers["Authorization"] = "Basic " + bencoded
-        return (headers)
-
-    def auth_headers(self):
-        headers = {}
-        key = self.key
-        secret = self.secret
-        toencode = key + ":" + secret
-        bencoded = base64.b64encode(toencode.encode())
-        #bencoded = base64.b64encode(toencode)
-        headers["Authorization"] = "Basic " + bencoded.decode()
-        #headers["Authorization"] = "Basic " + bencoded
-        return (headers)
-
-    def getOrganizations(self):
-        headers = self.auth_headers()
-        url = "https://management.api.umbrella.com/v1/organizations"
-        return(self.get(headers=headers,url=url,verify=True))      
-    def getDevices(self):
-        headers = self.management_headers()
-        url = "https://management.api.umbrella.com/v1/organizations/{}/networkdevices".format(self.orgid)
-        return(self.get(headers=headers,url=url,verify=True))      
-
-    def getDestinationLists(self):
-        headers = self.management_headers()
-        url = "https://management.api.umbrella.com/v1/organizations/{}/destinationlists".format(self.orgid)
-        return(self.get(headers=headers,url=url,verify=True))      
-
-
-    def listEnforcement(self):
-
-        headers = {'Content-Type': 'application/json'}
-        url = "https://s-platform.api.opendns.com/1.0/domains?customerKey={}".format(self.enforce_token)
-
-        return(self.get(headers=headers,url=url,verify=True))
-               
-    def deleteEnforcement(self,domain):
-        headers = {'Content-Type': 'application/json'}
-
-        url = "https://s-platform.api.opendns.com/1.0/domains/{}?customerKey={}".format(domain,self.enforce_token)
-        return (self.delete(url=url,headers=headers,verify=True))
-
-
-    def addEnforcement(self,domain,url):
-        headers = {'Content-Type': 'application/json'}
-        pdata = {
-            "alertTime": strftime("%Y-%m-%dT%H:%M:%S.0Z",gmtime()),
-            "deviceVersion": "13.7a",
-            "deviceId": "ba6a59f4-e692-4724-ba36-c28132c761de",
-            "dstDomain": domain,
-            "dstUrl": url,
-            "eventTime": strftime("%Y-%m-%dT%H:%M:%S.0Z",gmtime()),
-            "protocolVersion": "1.0a",
-            "providerName": "Hacke Labrats"
-        }
-        url = "https://s-platform.api.opendns.com/1.0/events?customerKey={}".format(self.enforce_token)
-        return(self.post(url,headers=headers,data=json.dumps(pdata),verify=True))
-                  
-    def report_get(self,url):
-        headers = {}
-        key = self.key
-        secret = self.secret
-        toencode = key + ":" + secret
-        bencoded = base64.b64encode(toencode.encode())
-        headers["Authorization"] = "Basic " + bencoded.decode()
-
-        return(self.get(headers=headers,url=url,verify=True))
-
-    def reportSecurityActivity(self,days=0,hours=1,minutes=0):
-        # headers = {}
-
-        time_to = datetime.utcnow()
-        time_from = datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))
-        start = str(time_from.timestamp())[:-7]
-        stop = str(time_to.timestamp())[:-7]
-        url = "https://reports.api.umbrella.com/v1/organizations/{}/security-activity?start={}&stop={}".format(self.orgid,start,stop)
-#        url = "https://reports.api.umbrella.com/v1/organizations/{}/security-activity".format(self.orgid)
-        return(self.report_get(url=url))
-
-    def reportDestinationIdentities(self,domain):
-    
-        url = "https://reports.api.umbrella.com/v1/organizations/{}/destinations/{}/identities".format(self.orgid,domain)
-        return(self.report_get(url=url))
-    def reportDestinationActivity(self,domain):
-    
-        url = "https://reports.api.umbrella.com/v1/organizations/{}/destinations/{}/activity".format(self.orgid,domain)
-        return(self.report_get(url=url))
-
-    def investigate_get(self,url):
         headers = {
-             'Authorization': 'Bearer ' + self.investigate_token
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+        #    'Authorization':""
         }
-        return self.get(headers=headers,url=url,verify=True)
+        key = self.key
+        secret = self.secret
+        toencode = key + ":" + secret
+        bencoded = base64.b64encode(toencode.encode())
+        #headers["Authorization"] = "Basic " + bencoded.decode()
+        data = {
+            'grant_type': 'client_credentials'
+        }
+        rsp = self.post(url=self.token_url,headers=headers,data=json.dumps(data),verify=self.verify)
+        self.access_token = rsp["access_token"]
+        self.headers =  headers = {
+            'Accept': 'application/json',
+            'Authorization': "Bearer " + self.access_token
+        }
 
-    def investigateCategories(self,domain):
-        url = "https://investigate.api.opendns.com/domains/categorization/{}/?showLabels".format(domain)
-        return self.investigate_get(url=url)
+    def activity_ztna(self,start="-1days",stop="now",limit="100",identityids=None):
+        url = "https://api.sse.cisco.com/reports/v2/activity/ztna?from={}&to={}&limit={}".format(start,stop,limit)
+        if identityids:
+            url = url + "&identityids={}".format(identityids)
+        self.headers =  headers = {
+            'Accept': 'application/json',
+            'Authorization': "Bearer " + self.access_token
+        }
+        rsp = self.get(url=url,headers=self.headers,verify=self.verify)
+        return(rsp)
+    
+    def activity_firewall(self,start="-1days",stop="now",limit="100",identityids=None):
+        url = "https://api.sse.cisco.com/reports/v2/activity/firewall?from={}&to={}&limit={}".format(start,stop,limit)
+        if identityids:
+            url = url + "&identityids={}".format(identityids)
+        self.headers =  headers = {
+            'Accept': 'application/json',
+            'Authorization': "Bearer " + self.access_token
+        }
+        rsp = self.get(url=url,headers=self.headers,verify=self.verify)
+        return(rsp)
 
-    def investigateDNSDB(self,domain):
-        url = "https://investigate.api.opendns.com/dnsdb/name/a/{}".format(domain)
-        return self.investigate_get(url=url)
-
-    def investigateTimeline(self,domain):
-        url = "https://investigate.api.opendns.com/timeline/{}".format(domain)
-        return self.investigate_get(url=url)
-
-    def investigateIP(self,ip):
-        url = "https://investigate.api.opendns.com/dnsdb/ip/a/{}".format(ip)
-        return self.investigate_get(url=url)
-
-    def investigateIPlatestDomains(self,ip):
-        url = "https://investigate.api.opendns.com/ips/{}/latest_domains".format(ip)
-        return self.investigate_get(url=url)
-
-    def investigateIPtimeline(self,ip):
-        url = "https://investigate.api.opendns.com/timeline/{}".format(ip)
-        return self.investigate_get(url=url)
-
-    def investigateSample(self,hash):
-        url = "https://investigate.api.opendns.com/sample/{}".format(hash)
-        return self.investigate_get(url=url)
-  
 
 class CTR(CATS):
 
@@ -1946,6 +2092,14 @@ class ISE_ANC(CATS):
             url = url + "/" + eid
 
         return (self.get(url=url,headers=headers,verify=False))
+
+    def endpoints2(self,eid=""):
+        headers = {"ACCEPT":"application/json","Authorization":""}
+        bencode = base64.b64encode((self.username + ":" + self.password).encode())
+        headers["Authorization"] = "Basic " + bencode.decode()
+        url = "https://" + self.server + "/api/v1/endpoint?size=100&page=4"
+        return(self.get(url=url,headers=headers,verify=False))
+    
 
     def macPolicy(self,mac=""):
         rsp = self.endpoints()
@@ -2546,5 +2700,147 @@ class AAD(CATS):
         rsp = self.get(url=url,headers=headers,verify=True)
         return(rsp)
     
+class UMBRELLALEGACY(CATS):
 
+    def __init__(self,investigate_token="",enforce_token="",key="",secret="",mkey="",msecret="",orgid="",debug=False,logfile=""):
+        CATS.__init__(self,debug,logfile)
+        self.investigate_token = investigate_token
+        self.enforce_token = enforce_token        
+        self.key = key 
+        self.secret = secret
+        self.mkey = mkey
+        self.msecret = msecret
+        self.orgid = orgid
+        
+
+    def management_headers(self):
+        headers = {}
+        key = self.mkey
+        secret = self.msecret
+        toencode = key + ":" + secret
+        bencoded = base64.b64encode(toencode.encode())
+        #bencoded = base64.b64encode(toencode)
+        headers["Authorization"] = "Basic " + bencoded.decode()
+        #headers["Authorization"] = "Basic " + bencoded
+        return (headers)
+
+    def auth_headers(self):
+        headers = {}
+        key = self.key
+        secret = self.secret
+        toencode = key + ":" + secret
+        bencoded = base64.b64encode(toencode.encode())
+        #bencoded = base64.b64encode(toencode)
+        headers["Authorization"] = "Basic " + bencoded.decode()
+        #headers["Authorization"] = "Basic " + bencoded
+        return (headers)
+
+    def getOrganizations(self):
+        headers = self.auth_headers()
+        url = "https://management.api.umbrella.com/v1/organizations"
+        return(self.get(headers=headers,url=url,verify=True))      
+    def getDevices(self):
+        headers = self.management_headers()
+        url = "https://management.api.umbrella.com/v1/organizations/{}/networkdevices".format(self.orgid)
+        return(self.get(headers=headers,url=url,verify=True))      
+
+    def getDestinationLists(self):
+        headers = self.management_headers()
+        url = "https://management.api.umbrella.com/v1/organizations/{}/destinationlists".format(self.orgid)
+        return(self.get(headers=headers,url=url,verify=True))      
+
+
+    def listEnforcement(self):
+
+        headers = {'Content-Type': 'application/json'}
+        url = "https://s-platform.api.opendns.com/1.0/domains?customerKey={}".format(self.enforce_token)
+
+        return(self.get(headers=headers,url=url,verify=True))
+               
+    def deleteEnforcement(self,domain):
+        headers = {'Content-Type': 'application/json'}
+
+        url = "https://s-platform.api.opendns.com/1.0/domains/{}?customerKey={}".format(domain,self.enforce_token)
+        return (self.delete(url=url,headers=headers,verify=True))
+
+
+    def addEnforcement(self,domain,url):
+        headers = {'Content-Type': 'application/json'}
+        pdata = {
+            "alertTime": strftime("%Y-%m-%dT%H:%M:%S.0Z",gmtime()),
+            "deviceVersion": "13.7a",
+            "deviceId": "ba6a59f4-e692-4724-ba36-c28132c761de",
+            "dstDomain": domain,
+            "dstUrl": url,
+            "eventTime": strftime("%Y-%m-%dT%H:%M:%S.0Z",gmtime()),
+            "protocolVersion": "1.0a",
+            "providerName": "Hacke Labrats"
+        }
+        url = "https://s-platform.api.opendns.com/1.0/events?customerKey={}".format(self.enforce_token)
+        return(self.post(url,headers=headers,data=json.dumps(pdata),verify=True))
+                  
+    def report_get(self,url):
+        headers = {}
+        key = self.key
+        secret = self.secret
+        toencode = key + ":" + secret
+        bencoded = base64.b64encode(toencode.encode())
+        headers["Authorization"] = "Basic " + bencoded.decode()
+
+        return(self.get(headers=headers,url=url,verify=True))
+
+    def reportSecurityActivity(self,days=0,hours=1,minutes=0):
+        # headers = {}
+
+        time_to = datetime.utcnow()
+        time_from = datetime.utcnow() - timedelta(days=int(days),hours = int(hours),minutes=int(minutes))
+        start = str(time_from.timestamp())[:-7]
+        stop = str(time_to.timestamp())[:-7]
+        url = "https://reports.api.umbrella.com/v1/organizations/{}/security-activity?start={}&stop={}".format(self.orgid,start,stop)
+#        url = "https://reports.api.umbrella.com/v1/organizations/{}/security-activity".format(self.orgid)
+        return(self.report_get(url=url))
+
+    def reportDestinationIdentities(self,domain):
+    
+        url = "https://reports.api.umbrella.com/v1/organizations/{}/destinations/{}/identities".format(self.orgid,domain)
+        return(self.report_get(url=url))
+    def reportDestinationActivity(self,domain):
+    
+        url = "https://reports.api.umbrella.com/v1/organizations/{}/destinations/{}/activity".format(self.orgid,domain)
+        return(self.report_get(url=url))
+
+    def investigate_get(self,url):
+        headers = {
+             'Authorization': 'Bearer ' + self.investigate_token
+        }
+        return self.get(headers=headers,url=url,verify=True)
+
+    def investigateCategories(self,domain):
+        url = "https://investigate.api.opendns.com/domains/categorization/{}/?showLabels".format(domain)
+        return self.investigate_get(url=url)
+
+    def investigateDNSDB(self,domain):
+        url = "https://investigate.api.opendns.com/dnsdb/name/a/{}".format(domain)
+        return self.investigate_get(url=url)
+
+    def investigateTimeline(self,domain):
+        url = "https://investigate.api.opendns.com/timeline/{}".format(domain)
+        return self.investigate_get(url=url)
+
+    def investigateIP(self,ip):
+        url = "https://investigate.api.opendns.com/dnsdb/ip/a/{}".format(ip)
+        return self.investigate_get(url=url)
+
+    def investigateIPlatestDomains(self,ip):
+        url = "https://investigate.api.opendns.com/ips/{}/latest_domains".format(ip)
+        return self.investigate_get(url=url)
+
+    def investigateIPtimeline(self,ip):
+        url = "https://investigate.api.opendns.com/timeline/{}".format(ip)
+        return self.investigate_get(url=url)
+
+    def investigateSample(self,hash):
+        url = "https://investigate.api.opendns.com/sample/{}".format(hash)
+        return self.investigate_get(url=url)
+  
     
